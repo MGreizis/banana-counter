@@ -1,31 +1,48 @@
 import { redis } from "@/lib/redis";
 import { NextResponse } from "next/server";
 
-const SCORES_KEY = "banana-count";
+const LEADERBOARD_KEY = "banana-leaderboard";
 
 /**
- * Returns the current count of bananas.
- * If the count doesn't exist yet, returns 0.
- * @returns {NextResponse} A JSON response containing the count.
+ * GET /api/banana
+ *
+ * If a userId is provided, returns the user's current score.
+ * If no userId is provided, returns the top 10 leaderboard entries.
+ *
+ * @param {Request} request - The incoming request object.
+ * @returns {NextResponse} - The response to send back to the client.
  */
 export async function GET(request: Request): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
   const userId = searchParams.get("userId");
 
-  if (!userId) {
-    return NextResponse.json({ error: "User ID is required" }, { status: 400 });
+  if (userId) {
+    const score = await redis.zscore(LEADERBOARD_KEY, userId);
+    return NextResponse.json({ score: Number(score) || 0 });
   }
 
-  // Get the value of a specific field (userId) from a hash (SCORES_KEY).
-  const score = await redis.hget(SCORES_KEY, userId);
+  const topTen = await redis.zrange(LEADERBOARD_KEY, 0, 9, {
+    rev: true,
+    withScores: true,
+  });
 
-  return NextResponse.json({ score: Number(score) || 0 });
+  const leaderboard = [];
+  for (let i = 0; i < topTen.length; i += 2) {
+    leaderboard.push({ user: topTen[i], score: Number(topTen[i + 1]) });
+  }
+
+  return NextResponse.json({ leaderboard });
 }
 
 /**
- * Increments the count of bananas.
- * @returns {NextResponse} A JSON response containing the new count.
+ * POST /api/banana
+ *
+ * Increments the user's score by 1 and returns the new score.
+ *
+ * @param {Request} request - The incoming request object.
+ * @returns {NextResponse} - The response to send back to the client.
  */
+
 export async function POST(request: Request): Promise<NextResponse> {
   const { userId } = await request.json();
 
@@ -33,9 +50,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "User ID is required" }, { status: 400 });
   }
 
-  // Atomically increment the value of a field (userId) in a hash.
-  // (key, field, increment_amount)
-  const newScore = await redis.hincrby(SCORES_KEY, userId, 1);
+  const newScore = await redis.zincrby(LEADERBOARD_KEY, 1, userId);
 
   return NextResponse.json({ score: newScore });
 }
